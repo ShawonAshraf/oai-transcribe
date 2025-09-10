@@ -93,48 +93,44 @@ class DictationService:
                 typ = ev.get("type")
                 logger.info(f"Received OpenAI event: {typ}")
 
-                if typ == self.config.ev_delta:
-                    delta = ev.get("delta")
-                    if delta:
-                        current.append(delta)
-                        logger.info(f"Transcription delta: '{delta}'")
-                elif typ == self.config.ev_done:
-                    final_transcript = "".join(current)
-                    collected.append(final_transcript)
-                    current.clear()
-                    logger.info(f"Transcription completed: '{final_transcript}'")
-                    break
-                elif typ == "error":
-                    error_info = ev.get("error", {})
-                    logger.error(f"OpenAI API error: {error_info}")
-                    raise Exception(f"OpenAI API error: {error_info.get('message', 'Unknown error')}")
-                elif typ == "transcription_session.created":
-                    logger.info("Transcription session created successfully")
-                elif typ == "transcription_session.updated":
-                    logger.info("Transcription session updated")
-                elif typ == "input_audio_buffer.speech_started":
-                    logger.info("Speech started")
-                elif typ == "input_audio_buffer.speech_stopped":
-                    logger.info("Speech stopped")
-                elif typ == "input_audio_buffer.committed":
-                    logger.info("Audio buffer committed")
-                elif typ == "conversation.item.created":
-                    logger.info("Conversation item created")
-                elif typ == "response.created":
-                    logger.info("Response created")
-                elif typ == "response.output_item.added":
-                    logger.info("Response output item added")
-                elif typ == "response.output_item.done":
-                    logger.info("Response output item done")
-                elif typ == "response.done":
-                    logger.info("Response done")
-                    # Also check if we have any transcription
+                SIMPLE_LOG_EVENTS = {
+                    "transcription_session.created",
+                    "transcription_session.updated",
+                    "input_audio_buffer.speech_started",
+                    "input_audio_buffer.speech_stopped",
+                    "input_audio_buffer.committed",
+                    "conversation.item.created",
+                    "response.created",
+                    "response.output_item.added",
+                    "response.output_item.done",
+                }
+
+                if typ == self.config.ev_delta and (delta := ev.get("delta")):
+                    current.append(delta)
+                    logger.info(f"Transcription delta: '{delta}'")
+
+                elif typ in [self.config.ev_done, "response.done"]:
+                    # Handle both 'done' events in one block to avoid repeating logic.
+                    logger.info("Response done" if typ == "response.done" else "Transcription completed")
                     if current:
                         final_transcript = "".join(current)
                         collected.append(final_transcript)
-                        logger.info(f"Final transcription from response.done: '{final_transcript}'")
+                        current.clear()
+                        logger.info(f"Final transcription collected: '{final_transcript}'")
                         break
+
+                elif typ == "error":
+                    error_info = ev.get("error", {})
+                    message = error_info.get('message', 'Unknown error')
+                    logger.error(f"OpenAI API error: {error_info}")
+                    raise Exception(f"OpenAI API error: {message}")
+
+                elif typ in SIMPLE_LOG_EVENTS:
+                    log_message = typ.replace("_", " ").replace(".", " ").capitalize()
+                    logger.info(log_message)
+
                 else:
+                    # A catch-all for any other event types.
                     logger.info(f"Unhandled event type: {typ}, data: {ev}")
 
         except websockets.ConnectionClosedOK:
