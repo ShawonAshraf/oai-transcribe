@@ -2,10 +2,12 @@ import asyncio
 import base64
 import json
 import logging
+import os
 import time
 
 import resampy
 import websockets
+from fastapi import HTTPException
 from pydantic import BaseModel
 import struct
 import numpy as np
@@ -13,6 +15,10 @@ import soundfile as sf
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+class Settings(BaseModel):
+    openai_api_key: str = os.getenv("OPENAI_API_KEY")
+settings = Settings()
 
 
 class DictationConfig(BaseModel):
@@ -37,6 +43,23 @@ class DictationHelpers:
         pcm_bytes = cls.float_to_16bit_pcm(float32_array)
         encoded = base64.b64encode(pcm_bytes).decode('ascii')
         return encoded
+
+    @classmethod
+    async def send_audio(cls, ws, pcm: np.ndarray, chunk: int,) -> None:
+        dur = 0.025
+        t_next = time.monotonic()
+
+        for i in range(0, len(pcm), chunk):
+            float_chunk = pcm[i:i + chunk]
+            payload = {
+                "type": "input_audio_buffer.append",
+                "audio": cls.base64_encode_audio(float_chunk),
+            }
+            await ws.send(json.dumps(payload))
+            t_next += dur
+            await asyncio.sleep(max(0, t_next - time.monotonic()))
+
+        await ws.send(json.dumps({"type": "input_audio_buffer.commit"}))
 
 
 
@@ -64,23 +87,7 @@ class DictationService:
             data = resampy.resample(data, file_sr, sr)
         return data
 
-    async def send_audio(self, ws, pcm: np.ndarray, chunk: int,) -> None:
-        sr = self.config.target_sr
 
-        dur = 0.025
-        t_next = time.monotonic()
-
-        for i in range(0, len(pcm), chunk):
-            float_chunk = pcm[i:i + chunk]
-            payload = {
-                "type": "input_audio_buffer.append",
-                "audio": DictationHelpers.base64_encode_audio(float_chunk),
-            }
-            await ws.send(json.dumps(payload))
-            t_next += dur
-            await asyncio.sleep(max(0, t_next - time.monotonic()))
-
-        await ws.send(json.dumps({"type": "input_audio_buffer.commit"}))
 
     async def receive_transcripts(self, ws, collected: list[str]) -> None:
         """Consumer: build current from streaming deltas."""
@@ -150,6 +157,59 @@ class DictationService:
             logger.info(f"Final transcription: {''.join(current)}")
 
 
+    async def transcribe_audio_stream(self, audio_chunks: list[np.ndarray]) -> str:
+        """Transcribe a stream of audio chunks using OpenAI's realtime API."""
+        if not audio_chunks:
+            logger.warning("No audio chunks provided")
+            return ""
 
+        logger.info(f"Processing {len(audio_chunks)} audio chunks")
+        for i, chunk in enumerate(audio_chunks):
+            logger.info(f"Chunk {i}: {len(chunk)} samples")
+
+        # Concatenate all audio chunks
+        pcm = np.concatenate(audio_chunks)
+        logger.info(f"Total audio length: {len(pcm)} samples ({len(pcm)/self.config.target_sr:.2f} seconds)")
+
+        api_key = settings.openai_api_key
+        if not api_key:
+            raise HTTPException(status_code=500, detail="OpenAI API key not configured")
+
+        headers = {"Authorization": f"Bearer {api_key}", "OpenAI-Beta": "realtime=v1"}
+
+        transcripts: list[str] = []
+
+        try:
+            logger.info("Connecting to OpenAI realtime API...")
+            async with websockets.connect(self.config.rt_url, additional_headers=headers, max_size=None) as ws:
+                logger.info("Connected to OpenAI realtime API")
+
+                # Send session configuration
+                session_config = self._session()
+                logger.info(f"Sending session config: {session_config}")
+                await ws.send(json.dumps(session_config))
+
+                # Send audio data
+                logger.info("Sending audio data to OpenAI...")
+                await DictationHelpers.send_audio(ws, pcm, self.config.chunk_samples)
+                logger.info("Audio data sent, waiting for transcription...")
+
+                # Receive transcription results with increased timeout
+                logger.info("Waiting for transcription results...")
+                await asyncio.wait_for(self.receive_transcripts(ws, transcripts), timeout=120.0)
+                logger.info(f"Transcription completed, result: '{''.join(transcripts)}'")
+
+        except asyncio.TimeoutError:
+            logger.error("Timeout waiting for transcription results (120 seconds)")
+            # Don't fail completely, return empty result
+            return "Transcription timeout - please try again"
+        except websockets.exceptions.ConnectionClosedError as e:
+            logger.error(f"WebSocket connection closed: {e}")
+            return "Connection to transcription service was lost"
+        except Exception as e:
+            logger.error(f"Error in transcription: {e}")
+            return f"Transcription failed: {str(e)}"
+
+        return " ".join(transcripts)
 
 
