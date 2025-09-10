@@ -44,3 +44,4 @@ def format_for_tts(text: str) -> str:
     out = __strip(text)
     out = __remove_citations(out)
     return out
+

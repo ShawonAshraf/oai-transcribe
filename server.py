@@ -14,6 +14,7 @@ from settings import settings
 
 import openai
 
+from utils import chunk_text
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -204,23 +205,26 @@ async def websocket_tts(websocket: WebSocket):
             text_to_speak = formatting.format_for_tts(text_to_speak)
 
             try:
-                # Use OpenAI's streaming TTS API
-                response = await client.audio.speech.create(
-                    model=config.model_name,
-                    voice=config.voice,
-                    input=text_to_speak,
-                    response_format=config.response_format, # Opus is great for web streaming
-                )
+                text_chunks = chunk_text(text_to_speak, config.chunk_size)
+                for tc in text_chunks:
+                    print(f"Number of chunks: {len(text_chunks)}")
+                    # Use OpenAI's streaming TTS API
+                    response = await client.audio.speech.create(
+                        model=config.model_name,
+                        voice=config.voice,
+                        input=tc,
+                        response_format=config.response_format, # Opus is great for web streaming
+                    )
 
-                # Stream the audio chunks to the client
-                print("Streaming audio to client...")
-                # The response object has a streaming interface but iter_bytes() is not async
-                # We need to use the synchronous iter_bytes method in an async context
-                for chunk in response.iter_bytes(chunk_size=config.chunk_size):
-                    await websocket.send_bytes(chunk)
+                    # Stream the audio chunks to the client
+                    print("Streaming audio to client...")
+                    # The response object has a streaming interface but iter_bytes() is not async
+                    # We need to use the synchronous iter_bytes method in an async context
+                    for chunk in response.iter_bytes(chunk_size=config.chunk_size):
+                        await websocket.send_bytes(chunk)
 
-                # Send an "end of stream" message to the client
-                # This helps the client know when to finalize the audio playback.
+                    # Send an "end of stream" message to the client
+                    # This helps the client know when to finalize the audio playback.
                 await websocket.send_text("EOS")
                 print("End of stream sent.")
 
