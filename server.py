@@ -91,18 +91,21 @@ async def websocket_transcribe(websocket: WebSocket):
                                     "message": error_message
                                 }))
                                 logger.error(f"OpenAI error: {error_info}")
-                        elif event_type == "transcription_session.created":
-                            logger.info("Transcription session created")
-                        elif event_type == "transcription_session.updated":
-                            logger.info("Transcription session updated")
-                        elif event_type == "input_audio_buffer.speech_started":
-                            logger.info("Speech detected")
-                        elif event_type == "input_audio_buffer.speech_stopped":
-                            logger.info("Speech ended")
-                        elif event_type == "input_audio_buffer.committed":
-                            logger.info("Audio buffer committed")
+
                         else:
-                            logger.debug(f"Unhandled OpenAI event: {event_type}")
+                            simple_event_logs = {
+                                "transcription_session.created": "Transcription session created",
+                                "transcription_session.updated": "Transcription session updated",
+                                "input_audio_buffer.speech_started": "Speech detected",
+                                "input_audio_buffer.speech_stopped": "Speech ended",
+                            }
+
+                            if event_type in simple_event_logs:
+                                logger.info(simple_event_logs[event_type])
+                            else:
+                                logger.info(f"Unhandled OpenAI event: {event_type}")
+
+
 
                 except websockets.ConnectionClosedOK:
                     logger.info("OpenAI WebSocket connection closed normally")
