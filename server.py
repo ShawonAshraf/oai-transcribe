@@ -25,10 +25,12 @@ async def websocket_transcribe(websocket: WebSocket):
 
     api_key = settings.openai_api_key.get_secret_value()
     if not api_key:
+        logger.error("OpenAI API key not set, closing websocket")
         await websocket.send_text(json.dumps({
             "type": "error",
-            "message": "OpenAI API key not configured"
-        }))
+            "message": "Error connecting to transcription service"
+        },))
+
         await websocket.close()
         return
 
@@ -42,8 +44,8 @@ async def websocket_transcribe(websocket: WebSocket):
             logger.info("Connected to OpenAI realtime API")
 
             # Configure session
-            session_config = service.session()
-            await openai_ws.send(json.dumps(session_config))
+            dictation_session = service.create_session()
+            await openai_ws.send(json.dumps(dictation_session))
             logger.info("Session configured")
 
             # Notify client that session is ready

@@ -2,18 +2,12 @@ import asyncio
 import base64
 import json
 import logging
-import os
 import time
 
-import resampy
-import websockets
-from fastapi import HTTPException
 from pydantic import BaseModel
 import struct
 import numpy as np
-import soundfile as sf
 
-from settings import settings
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -65,7 +59,7 @@ class DictationService:
     def __init__(self, config: DictationConfig):
         self.config = config
 
-    def session(self, vad: float = 0.5) -> dict:
+    def create_session(self, vad: float = 0.5) -> dict:
         return {
             "type": "transcription_session.update",
             "session": {
