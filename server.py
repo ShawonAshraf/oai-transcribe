@@ -6,6 +6,8 @@ import uvicorn
 import websockets
 import logging
 import json
+from tts_service import TTSConfig
+import formatting
 from dictation_service import DictationService, DictationConfig
 
 from settings import settings
@@ -191,25 +193,30 @@ async def websocket_tts(websocket: WebSocket):
         await websocket.close(code=1011, reason="OpenAI client not available")
         return
 
+    config = TTSConfig()
+
     try:
         while True:
             # Receive text from the client
             text_to_speak = await websocket.receive_text()
             print(f"Received text: '{text_to_speak}'")
 
+            text_to_speak = formatting.format_for_tts(text_to_speak)
+
             try:
                 # Use OpenAI's streaming TTS API
                 response = await client.audio.speech.create(
-                    model="tts-1",
-                    voice="alloy",
+                    model=config.model_name,
+                    voice=config.voice,
                     input=text_to_speak,
-                    response_format="opus", # Opus is great for web streaming
+                    response_format=config.response_format, # Opus is great for web streaming
                 )
 
                 # Stream the audio chunks to the client
                 print("Streaming audio to client...")
-                # We use iter_bytes to get the raw audio data chunks
-                async for chunk in response.iter_bytes(chunk_size=4096):
+                # The response object has a streaming interface but iter_bytes() is not async
+                # We need to use the synchronous iter_bytes method in an async context
+                for chunk in response.iter_bytes(chunk_size=config.chunk_size):
                     await websocket.send_bytes(chunk)
 
                 # Send an "end of stream" message to the client
