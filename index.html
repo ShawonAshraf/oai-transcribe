@@ -127,6 +127,7 @@
         let socket;
         let isRecording = false;
         let globalStream;
+        let audioChunksSent = 0;
 
         const recordBtn = document.getElementById('recordBtn');
         const stopBtn = document.getElementById('stopBtn');
@@ -224,10 +225,12 @@
                             type: "audio_chunk",
                             audio: base64data
                         }));
+                        audioChunksSent++;
                     }
                 };
                 
                 isRecording = true;
+                audioChunksSent = 0; // Reset counter for new recording session
                 
                 recordBtn.textContent = 'Recording...';
                 recordBtn.className = 'record-btn recording';
@@ -268,9 +271,12 @@
                     audioContext = null;
                 }
 
-                // Send commit to finalize transcription
-                if (socket && socket.readyState === WebSocket.OPEN) {
+                // Send commit to finalize transcription only if we actually sent audio data
+                if (socket && socket.readyState === WebSocket.OPEN && audioChunksSent > 0) {
                     socket.send(JSON.stringify({ type: "commit" }));
+                    console.log(`🎯 Committing ${audioChunksSent} audio chunks for transcription`);
+                } else if (audioChunksSent === 0) {
+                    console.log("🚫 No audio chunks sent - skipping commit to avoid empty buffer error");
                 }
 
                 recordBtn.textContent = 'Start Recording';

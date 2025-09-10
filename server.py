@@ -75,11 +75,22 @@ async def websocket_transcribe(websocket: WebSocket):
                             logger.info("Transcription completed")
                         elif event_type == "error":
                             error_info = ev.get("error", {})
-                            await websocket.send_text(json.dumps({
-                                "type": "error",
-                                "message": error_info.get("message", "OpenAI API error")
-                            }))
-                            logger.error(f"OpenAI error: {error_info}")
+                            error_code = error_info.get("code")
+                            error_message = error_info.get("message", "OpenAI API error")
+                            
+                            # Handle empty buffer error gracefully - user stopped recording too quickly
+                            if error_code == "input_audio_buffer_commit_empty":
+                                logger.info("User stopped recording")
+                                await websocket.send_text(json.dumps({
+                                    "type": "transcription_final",
+                                    "text": ""
+                                }))
+                            else:
+                                await websocket.send_text(json.dumps({
+                                    "type": "error",
+                                    "message": error_message
+                                }))
+                                logger.error(f"OpenAI error: {error_info}")
                         elif event_type == "transcription_session.created":
                             logger.info("Transcription session created")
                         elif event_type == "transcription_session.updated":
