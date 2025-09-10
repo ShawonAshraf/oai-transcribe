@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Real-time TTS Streaming</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+    </style>
+</head>
+<body class="bg-gray-900 text-white flex items-center justify-center min-h-screen">
+
+    <div class="w-full max-w-2xl bg-gray-800 rounded-2xl shadow-lg p-8 space-y-6">
+        <div class="text-center">
+            <h1 class="text-3xl font-bold text-cyan-400">Real-time Text-to-Speech</h1>
+            <p class="text-gray-400 mt-2">Enter text below and click "Speak" to stream audio from the server.</p>
+        </div>
+
+        <!-- Status Indicator -->
+        <div id="status" class="flex items-center justify-center space-x-3 bg-gray-700 p-3 rounded-lg">
+            <div id="status-indicator" class="w-4 h-4 rounded-full bg-yellow-500 animate-pulse"></div>
+            <span id="status-text" class="font-medium text-gray-300">Connecting to server...</span>
+        </div>
+
+        <!-- Input Area -->
+        <div class="space-y-4">
+            <textarea id="text-input" rows="6" class="w-full p-4 bg-gray-700 border border-gray-600 rounded-lg focus:ring-2 focus:ring-cyan-500 focus:border-cyan-500 transition duration-200 resize-none" placeholder="Type something to say..."></textarea>
+            <button id="speak-button" class="w-full bg-cyan-600 hover:bg-cyan-700 text-white font-bold py-3 px-4 rounded-lg transition duration-200 flex items-center justify-center space-x-2 disabled:bg-gray-500 disabled:cursor-not-allowed">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.858 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.858l4.293-4.293a1 1 0 011.414 0V19.293a1 1 0 01-1.414 0L5.858 15z" /></svg>
+                <span>Speak</span>
+            </button>
+        </div>
+
+        <!-- Audio Player (hidden by default) -->
+        <div class="text-center">
+             <audio id="audio-player" controls class="w-full hidden"></audio>
+        </div>
+
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const textInput = document.getElementById('text-input');
+            const speakButton = document.getElementById('speak-button');
+            const audioPlayer = document.getElementById('audio-player');
+            const status = document.getElementById('status');
+            const statusIndicator = document.getElementById('status-indicator');
+            const statusText = document.getElementById('status-text');
+
+            let websocket;
+            let audioChunks = [];
+            let audioContext;
+            let source;
+
+            function updateStatus(message, type) {
+                statusText.textContent = message;
+                statusIndicator.classList.remove('bg-yellow-500', 'bg-green-500', 'bg-red-500', 'bg-blue-500', 'animate-pulse');
+                switch (type) {
+                    case 'connecting':
+                        statusIndicator.classList.add('bg-yellow-500', 'animate-pulse');
+                        break;
+                    case 'connected':
+                        statusIndicator.classList.add('bg-green-500');
+                        break;
+                    case 'error':
+                        statusIndicator.classList.add('bg-red-500');
+                        break;
+                    case 'streaming':
+                        statusIndicator.classList.add('bg-blue-500', 'animate-pulse');
+                        break;
+                }
+            }
+
+            function connectWebSocket() {
+                const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                const wsUrl = `${wsProtocol}//${window.location.host}/ws/tts`;
+
+                websocket = new WebSocket(wsUrl);
+
+                websocket.onopen = () => {
+                    console.log('WebSocket connection established.');
+                    updateStatus('Connected. Ready to speak.', 'connected');
+                    speakButton.disabled = false;
+                };
+
+                websocket.onmessage = (event) => {
+                    // Binary data is the audio stream
+                    if (event.data instanceof Blob) {
+                        audioChunks.push(event.data);
+                        updateStatus('Receiving audio stream...', 'streaming');
+                    } else if (typeof event.data === 'string') {
+                        // Text data is a control message
+                        if (event.data === 'EOS') {
+                             // End of stream
+                            playAudio();
+                        } else if (event.data.startsWith('ERROR:')) {
+                            console.error('Received error from server:', event.data);
+                            updateStatus(event.data, 'error');
+                            speakButton.disabled = false;
+                        }
+                    }
+                };
+
+                websocket.onerror = (error) => {
+                    console.error('WebSocket error:', error);
+                    updateStatus('Connection error.', 'error');
+                };
+
+                websocket.onclose = () => {
+                    console.log('WebSocket connection closed. Reconnecting...');
+                    updateStatus('Disconnected. Reconnecting...', 'connecting');
+                    speakButton.disabled = true;
+                    // Simple reconnect logic
+                    setTimeout(connectWebSocket, 3000);
+                };
+            }
+
+            function playAudio() {
+                if (audioChunks.length === 0) {
+                    updateStatus('Received empty audio stream.', 'connected');
+                    speakButton.disabled = false;
+                    return;
+                }
+
+                updateStatus('Stream finished. Playing audio...', 'connected');
+
+                // For a truly low-latency experience, you would use the MediaSource API
+                // to append chunks as they arrive. For simplicity here, we create a
+                // Blob once all chunks are received. This introduces a slight delay
+                // but is much simpler to implement.
+                const audioBlob = new Blob(audioChunks, { type: 'audio/opus' });
+                const audioUrl = URL.createObjectURL(audioBlob);
+
+                audioPlayer.src = audioUrl;
+                audioPlayer.classList.remove('hidden');
+                audioPlayer.play();
+
+                audioPlayer.onended = () => {
+                    updateStatus('Playback finished.', 'connected');
+                    speakButton.disabled = false;
+                    // Clean up the object URL to free memory
+                    URL.revokeObjectURL(audioUrl);
+                };
+            }
+
+            speakButton.addEventListener('click', () => {
+                const text = textInput.value.trim();
+                if (text && websocket && websocket.readyState === WebSocket.OPEN) {
+                    audioChunks = []; // Clear previous audio chunks
+                    audioPlayer.classList.add('hidden');
+                    audioPlayer.src = '';
+                    speakButton.disabled = true;
+                    updateStatus('Sending text to server...', 'streaming');
+                    websocket.send(text);
+                } else {
+                    alert('Please enter some text and ensure you are connected.');
+                }
+            });
+
+            // Initial connection
+            speakButton.disabled = true;
+            connectWebSocket();
+        });
+    </script>
+</body>
+</html>

@@ -10,6 +10,8 @@ from dictation_service import DictationService, DictationConfig
 
 from settings import settings
 
+import openai
+
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -174,15 +176,80 @@ async def websocket_transcribe(websocket: WebSocket):
             "message": f"Unexpected error: {str(e)}"
         }))
 
+@app.websocket("/ws/tts")
+async def websocket_tts(websocket: WebSocket):
+    """
+    WebSocket endpoint for real-time text-to-speech.
+    Receives text from the client and streams back Opus audio chunks from OpenAI.
+    """
+    await websocket.accept()
+    print("WebSocket connection established.")
+
+    client = openai.AsyncOpenAI(api_key=settings.openai_api_key.get_secret_value())
+    if not client:
+        print("OpenAI client not initialized. Closing connection.")
+        await websocket.close(code=1011, reason="OpenAI client not available")
+        return
+
+    try:
+        while True:
+            # Receive text from the client
+            text_to_speak = await websocket.receive_text()
+            print(f"Received text: '{text_to_speak}'")
+
+            try:
+                # Use OpenAI's streaming TTS API
+                response = await client.audio.speech.create(
+                    model="tts-1",
+                    voice="alloy",
+                    input=text_to_speak,
+                    response_format="opus", # Opus is great for web streaming
+                )
+
+                # Stream the audio chunks to the client
+                print("Streaming audio to client...")
+                # We use iter_bytes to get the raw audio data chunks
+                async for chunk in response.iter_bytes(chunk_size=4096):
+                    await websocket.send_bytes(chunk)
+
+                # Send an "end of stream" message to the client
+                # This helps the client know when to finalize the audio playback.
+                await websocket.send_text("EOS")
+                print("End of stream sent.")
+
+            except Exception as e:
+                print(f"Error during OpenAI API call or streaming: {e}")
+                # Inform the client of the error
+                await websocket.send_text(f"ERROR: {e}")
+                break # Break the loop on error
+
+    except WebSocketDisconnect:
+        print("Client disconnected.")
+    except Exception as e:
+        print(f"An unexpected error occurred: {e}")
+    finally:
+        print("WebSocket connection closed.")
+
+
+
 # ── HTTP endpoints ────────────────────────────────────────────────────────────
-@app.get("/")
-async def get_index():
+@app.get("/view/dictate")
+async def view_dictate():
     """Serve the main HTML page."""
     html_path = Path("index.html")
     if html_path.exists():
         return HTMLResponse(content=html_path.read_text())
     else:
         raise HTTPException(status_code=404, detail="index.html file not found")
+
+@app.get("/view/tts")
+async def view_tts():
+    html_path = Path("tts.html")
+    if html_path.exists():
+        return HTMLResponse(content=html_path.read_text())
+    else:
+        raise HTTPException(status_code=404, detail="tts.html file not found")
+
 
 @app.get("/health")
 async def health_check():
