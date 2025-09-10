@@ -217,14 +217,14 @@ async def websocket_tts(websocket: WebSocket):
                     )
 
                     # Stream the audio chunks to the client
-                    print("Streaming audio to client...")
                     # The response object has a streaming interface but iter_bytes() is not async
                     # We need to use the synchronous iter_bytes method in an async context
                     async def stream_audio_chunk():
                         def iter_audio_bytes():
                             return list(response.iter_bytes(chunk_size=config.chunk_size))
-                        
+
                         # Execute the synchronous iteration in a thread pool
+                        print("Streaming audio to client...")
                         audio_chunks = await asyncio.to_thread(iter_audio_bytes)
                         
                         # Now send each chunk asynchronously
