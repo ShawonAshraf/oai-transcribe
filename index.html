@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Real-time Audio Transcription</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background: white;
+            border-radius: 12px;
+            padding: 30px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .controls {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+            justify-content: center;
+        }
+        button {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+        .record-btn {
+            background-color: #ff4757;
+            color: white;
+        }
+        .record-btn:hover {
+            background-color: #ff3338;
+        }
+        .record-btn.recording {
+            background-color: #2ed573;
+            animation: pulse 1.5s infinite;
+        }
+        .stop-btn, .transcribe-btn, .clear-btn {
+            background-color: #5352ed;
+            color: white;
+        }
+        .stop-btn:hover, .transcribe-btn:hover, .clear-btn:hover {
+            background-color: #3742fa;
+        }
+        .stop-btn:disabled, .transcribe-btn:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+        .status {
+            text-align: center;
+            margin-bottom: 20px;
+            font-weight: 500;
+        }
+        .status.connected {
+            color: #2ed573;
+        }
+        .status.disconnected {
+            color: #ff4757;
+        }
+        .transcription {
+            background-color: #f8f9fa;
+            border: 2px solid #e9ecef;
+            border-radius: 8px;
+            padding: 20px;
+            min-height: 200px;
+            font-size: 16px;
+            line-height: 1.5;
+            white-space: pre-wrap;
+        }
+        .transcription.empty {
+            color: #6c757d;
+            font-style: italic;
+        }
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.7; }
+            100% { opacity: 1; }
+        }
+        .info {
+            background-color: #e3f2fd;
+            border-left: 4px solid #2196f3;
+            padding: 15px;
+            margin-bottom: 20px;
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎤 Real-time Audio Transcription</h1>
+
+        <div class="info">
+            <strong>Instructions:</strong> Click "Start Recording" to begin real-time transcription.
+            Your speech will be converted to text live using OpenAI's Realtime API.
+        </div>
+
+        <div class="status" id="status">Disconnected</div>
+
+        <div class="controls">
+            <button id="recordBtn" class="record-btn">Start Recording</button>
+            <button id="stopBtn" class="stop-btn" disabled>Stop Recording</button>
+            <button id="clearBtn" class="clear-btn">Clear</button>
+        </div>
+
+        <div class="transcription empty" id="transcription">
+            Your transcription will appear here...
+        </div>
+    </div>
+
+    <script>
+        let audioContext;
+        let audioInput;
+        let processor;
+        let socket;
+        let isRecording = false;
+        let globalStream;
+
+        const recordBtn = document.getElementById('recordBtn');
+        const stopBtn = document.getElementById('stopBtn');
+        const transcribeBtn = document.getElementById('transcribeBtn');
+        const clearBtn = document.getElementById('clearBtn');
+        const status = document.getElementById('status');
+        const transcription = document.getElementById('transcription');
+
+        // Initialize WebSocket connection
+        function initWebSocket() {
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            socket = new WebSocket(`${protocol}//${window.location.host}/ws/transcribe`);
+
+            socket.onopen = function() {
+                status.textContent = 'Connected';
+                status.className = 'status connected';
+                console.log("✅ WebSocket connected");
+            };
+
+            socket.onclose = function() {
+                status.textContent = 'Disconnected';
+                status.className = 'status disconnected';
+                console.log("❌ WebSocket closed");
+            };
+
+            socket.onmessage = function(event) {
+                const message = JSON.parse(event.data);
+                console.log("Received message:", message);
+
+                if (message.type === 'transcription_delta') {
+                    // Stream text in real-time
+                    if (transcription.className.includes('empty')) {
+                        transcription.textContent = '';
+                        transcription.className = 'transcription';
+                    }
+                    transcription.textContent += message.text;
+                } else if (message.type === 'transcription_final') {
+                    // Add line break for final transcription
+                    transcription.textContent += "\n";
+                } else if (message.type === 'error') {
+                    transcription.textContent = `Error: ${message.message}`;
+                    transcription.className = 'transcription';
+                } else if (message.type === 'session_started') {
+                    console.log("🎯 Transcription session started");
+                }
+            };
+        }
+
+        // Convert float32 audio to PCM16 and base64 encode
+        function floatTo16BitPCM(float32Array) {
+            const buffer = new ArrayBuffer(float32Array.length * 2);
+            const view = new DataView(buffer);
+            let offset = 0;
+            for (let i = 0; i < float32Array.length; i++, offset += 2) {
+                let s = Math.max(-1, Math.min(1, float32Array[i]));
+                view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+            }
+            return buffer;
+        }
+
+        // Start recording and stream immediately
+        recordBtn.addEventListener('click', async function() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ 
+                    audio: {
+                        sampleRate: 24000,
+                        channelCount: 1,
+                        echoCancellation: false,
+                        noiseSuppression: false,
+                        autoGainControl: false
+                    } 
+                });
+                
+                globalStream = stream;
+                audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 24000 });
+                
+                audioInput = audioContext.createMediaStreamSource(stream);
+                processor = audioContext.createScriptProcessor(4096, 1, 1);
+                
+                audioInput.connect(processor);
+                processor.connect(audioContext.destination);
+                
+                processor.onaudioprocess = (e) => {
+                    if (!isRecording) return;
+                    
+                    const float32Data = e.inputBuffer.getChannelData(0);
+                    const pcm16Buffer = floatTo16BitPCM(float32Data);
+                    const bytes = new Uint8Array(pcm16Buffer);
+                    const base64data = btoa(String.fromCharCode(...bytes));
+                    
+                    console.log(`🎙️ Streaming chunk: ${float32Data.length} samples -> ${base64data.length} base64 chars`);
+                    
+                    if (socket && socket.readyState === WebSocket.OPEN) {
+                        socket.send(JSON.stringify({
+                            type: "audio_chunk",
+                            audio: base64data
+                        }));
+                    }
+                };
+                
+                isRecording = true;
+                
+                recordBtn.textContent = 'Recording...';
+                recordBtn.className = 'record-btn recording';
+                recordBtn.disabled = true;
+                stopBtn.disabled = false;
+                transcribeBtn.disabled = true; // No longer needed for immediate streaming
+                
+                console.log("🎙️ Live streaming started with sample rate:", audioContext.sampleRate);
+                
+            } catch (error) {
+                console.error('Error accessing microphone:', error);
+                alert('Error accessing microphone. Please make sure you have granted microphone permissions.');
+            }
+        });
+
+        // Stop recording
+        stopBtn.addEventListener('click', function() {
+            if (isRecording) {
+                isRecording = false;
+
+                if (processor) {
+                    processor.disconnect();
+                    processor = null;
+                }
+                
+                if (audioInput) {
+                    audioInput.disconnect();
+                    audioInput = null;
+                }
+                
+                if (globalStream) {
+                    globalStream.getTracks().forEach(track => track.stop());
+                    globalStream = null;
+                }
+                
+                if (audioContext) {
+                    audioContext.close();
+                    audioContext = null;
+                }
+
+                // Send commit to finalize transcription
+                if (socket && socket.readyState === WebSocket.OPEN) {
+                    socket.send(JSON.stringify({ type: "commit" }));
+                }
+
+                recordBtn.textContent = 'Start Recording';
+                recordBtn.className = 'record-btn';
+                recordBtn.disabled = false;
+                stopBtn.disabled = true;
+
+                console.log('🛑 Recording stopped and committed');
+            }
+        });
+
+        // Clear transcription
+        clearBtn.addEventListener('click', function() {
+            transcription.textContent = 'Your transcription will appear here...';
+            transcription.className = 'transcription empty';
+
+            if (socket && socket.readyState === WebSocket.OPEN) {
+                socket.send(JSON.stringify({
+                    type: 'clear_buffer'
+                }));
+            }
+            
+            console.log('🧹 Transcription cleared');
+        });
+
+        // Initialize WebSocket on page load
+        initWebSocket();
+    </script>
+</body>
+</html>
