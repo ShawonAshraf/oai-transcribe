@@ -13,12 +13,10 @@ import struct
 import numpy as np
 import soundfile as sf
 
+from settings import settings
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-class Settings(BaseModel):
-    openai_api_key: str = os.getenv("OPENAI_API_KEY")
-settings = Settings()
 
 
 class DictationConfig(BaseModel):
@@ -67,7 +65,7 @@ class DictationService:
     def __init__(self, config: DictationConfig):
         self.config = config
 
-    def _session(self, vad: float = 0.5) -> dict:
+    def session(self, vad: float = 0.5) -> dict:
         return {
             "type": "transcription_session.update",
             "session": {
@@ -171,7 +169,7 @@ class DictationService:
         pcm = np.concatenate(audio_chunks)
         logger.info(f"Total audio length: {len(pcm)} samples ({len(pcm)/self.config.target_sr:.2f} seconds)")
 
-        api_key = settings.openai_api_key
+        api_key = settings.openai_api_key.get_secret_value()
         if not api_key:
             raise HTTPException(status_code=500, detail="OpenAI API key not configured")
 
